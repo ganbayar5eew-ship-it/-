@@ -1,0 +1,973 @@
+<!DOCTYPE html>
+<html lang="mn">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ангийн Ирц & Хичээл Хяналтын Систем</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f1f5f9;
+        }
+        .custom-scroll::-webkit-scrollbar {
+            width: 4px;
+        }
+        .custom-scroll::-webkit-scrollbar-track {
+            background: #f1f1f1;
+        }
+        .custom-scroll::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 4px;
+        }
+        @keyframes pulse-ring {
+            0% { transform: scale(0.95); opacity: 0.8; }
+            50% { transform: scale(1.1); opacity: 0.4; }
+            100% { transform: scale(0.95); opacity: 0.8; }
+        }
+        .pulse-dot {
+            animation: pulse-ring 2s infinite ease-in-out;
+        }
+    </style>
+
+    <!-- Firebase Configuration and Storage Integration Setup -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc, onSnapshot, collection } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Firebase Initialization with fallback safeguards
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'school-attendance-app';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+            apiKey: "demo-api-key",
+            authDomain: "demo-app.firebaseapp.com",
+            projectId: "demo-app",
+            storageBucket: "demo-app.appspot.com",
+            messagingSenderId: "123456789",
+            appId: "1:123456789:web:abcdef"
+        };
+
+        let app, auth, db;
+        let currentUser = null;
+
+        try {
+            app = initializeApp(firebaseConfig);
+            auth = getAuth(app);
+            db = getFirestore(app);
+            
+            // Authenticate user anonymously to allow secure database read/write
+            if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                await signInWithCustomToken(auth, __initial_auth_token);
+            } else {
+                await signInAnonymously(auth);
+            }
+            
+            window.dbInstance = db;
+            window.appId = appId;
+            
+            // Listen to real-time changes from Firestore database
+            setupRealtimeSync(db, appId);
+        } catch (e) {
+            console.warn("Firebase config fallback to local state simulation mode.", e);
+        }
+
+        onAuthStateChanged(auth, (user) => {
+            if (user) {
+                currentUser = user;
+                window.currentUser = user;
+                console.log("Authenticated User ID:", user.uid);
+            }
+        });
+
+        // Realtime Database Listener function for Class & Student Data Sync
+        function setupRealtimeSync(db, appId) {
+            import("https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js").then(({ doc, onSnapshot, setDoc }) => {
+                const classDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'schoolClassData', 'mainClass');
+                
+                onSnapshot(classDocRef, (docSnap) => {
+                    if (docSnap.exists()) {
+                        const data = docSnap.data();
+                        if (data.students && Array.isArray(data.students)) {
+                            window.classStudents = data.students;
+                            if (data.className && data.teacherName) {
+                                window.className = data.className;
+                                window.teacherName = data.teacherName;
+                            }
+                            window.updateUIFromCloudData();
+                        }
+                    }
+                }, (error) => {
+                    console.log("Realtime sync error:", error);
+                });
+            });
+        }
+
+        window.saveCloudData = async function(students, className, teacherName) {
+            if (!window.dbInstance) return;
+            try {
+                const { doc, setDoc } = await import("https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js");
+                const classDocRef = doc(window.dbInstance, 'artifacts', window.appId, 'public', 'data', 'schoolClassData', 'mainClass');
+                await setDoc(classDocRef, {
+                    students: students,
+                    className: className || "5А анги",
+                    teacherName: teacherName || "Г.Бат-Эрдэнэ",
+                    updatedAt: new Date().toISOString()
+                }, { merge: true });
+            } catch(e) {
+                console.error("Cloud save failed:", e);
+            }
+        };
+    </script>
+</head>
+<body class="flex items-center justify-center min-h-screen p-2 sm:p-4 bg-slate-900">
+
+    <div class="w-full max-w-md bg-white sm:rounded-3xl shadow-2xl overflow-hidden border border-gray-100 flex flex-col h-[100vh] sm:h-[880px] relative">
+        
+        <!-- Status Bar -->
+        <div class="bg-sky-600 text-white px-6 pt-3 pb-2 flex justify-between items-center text-xs font-medium">
+            <span id="current-time-clock">08:30 AM</span>
+            <div class="flex items-center space-x-2">
+                <i class="fa-solid fa-wifi"></i>
+                <i class="fa-solid fa-battery-full"></i>
+            </div>
+        </div>
+
+        <!-- Header -->
+        <div class="bg-sky-600 text-white px-5 pb-5 pt-2 rounded-b-2xl shadow-md">
+            <div class="flex justify-between items-center mb-3">
+                <div class="flex items-center space-x-3 w-full pr-2">
+                    <div class="relative flex-shrink-0">
+                        <img id="child-avatar" src="https://images.unsplash.com/photo-1543610892-0b1f7e6d8ac1?w=150&auto=format&fit=crop&q=80" alt="Avatar" class="w-12 h-12 rounded-full border-2 border-white object-cover shadow">
+                        <span id="child-status-badge" class="absolute bottom-0 right-0 w-3.5 h-3.5 bg-emerald-500 border-2 border-white rounded-full"></span>
+                    </div>
+                    <div class="flex-1">
+                        <div class="flex items-center justify-between gap-1">
+                            <!-- Student Selector -->
+                            <select id="student-select" onchange="switchStudent(this.value)" class="bg-sky-700 text-xs text-white rounded px-2 py-1 font-bold border border-sky-400 focus:outline-none cursor-pointer max-w-[130px] sm:max-w-[150px]">
+                                <!-- Dynamic Options -->
+                            </select>
+                            <!-- Teacher Management Button -->
+                            <button onclick="openSettingsModal()" class="text-[10px] bg-amber-500 hover:bg-amber-600 font-bold px-2 py-1 rounded text-white flex items-center space-x-1 border border-amber-300 shadow">
+                                <i class="fa-solid fa-gear"></i>
+                                <span>Анги & Тохиргоо</span>
+                            </button>
+                        </div>
+                        <p id="child-school" class="text-xs text-sky-100 mt-1">5А анги • Багш: Г.Бат-Эрдэнэ</p>
+                    </div>
+                </div>
+                <button onclick="triggerNotification()" class="relative p-2 bg-sky-500 hover:bg-sky-400 rounded-full transition shadow text-white flex-shrink-0">
+                    <i class="fa-regular fa-bell text-lg"></i>
+                    <span class="absolute top-1 right-1 w-2.5 h-2.5 bg-red-500 rounded-full border border-sky-600"></span>
+                </button>
+            </div>
+
+            <!-- Card Status -->
+            <div id="status-card" class="bg-white/10 backdrop-blur-md rounded-xl p-3 border border-white/20 flex items-center justify-between">
+                <div class="flex items-center space-x-3">
+                    <div id="status-icon-bg" class="w-10 h-10 rounded-lg bg-emerald-500/20 flex items-center justify-center text-emerald-300">
+                        <i id="status-icon" class="fa-solid fa-school-circle-check text-xl"></i>
+                    </div>
+                    <div>
+                        <p class="text-xs text-sky-100">Өнөөдрийн төлөв</p>
+                        <p id="status-text" class="text-sm font-semibold text-white">Сургууль дээрээ байна</p>
+                    </div>
+                </div>
+                <span id="status-time" class="text-xs font-mono bg-white/20 px-2 py-1 rounded text-white">07:55 AM</span>
+            </div>
+        </div>
+
+        <!-- Main Content Scroll Area -->
+        <div class="flex-1 overflow-y-auto custom-scroll p-4 space-y-4" id="main-content">
+            
+            <!-- Navigation -->
+            <div class="flex bg-gray-100 p-1 rounded-xl text-[11px] font-medium text-gray-600 overflow-x-auto gap-1">
+                <button onclick="switchTab('attendance')" id="tab-btn-attendance" class="flex-1 min-w-[60px] py-2 rounded-lg bg-white shadow text-sky-600 font-bold transition">
+                    <i class="fa-solid fa-calendar-check mr-1"></i> Нүүр
+                </button>
+                <button onclick="switchTab('class-teacher')" id="tab-btn-class-teacher" class="flex-1 min-w-[85px] py-2 rounded-lg hover:text-sky-600 transition">
+                    <i class="fa-solid fa-user-shield mr-1"></i> Ангийн багш
+                </button>
+                <button onclick="switchTab('teacher-portal')" id="tab-btn-teacher-portal" class="flex-1 min-w-[75px] py-2 rounded-lg hover:text-sky-600 transition">
+                    <i class="fa-solid fa-clipboard-user mr-1"></i> Цагийн багш
+                </button>
+                <button onclick="switchTab('grades')" id="tab-btn-grades" class="flex-1 min-w-[60px] py-2 rounded-lg hover:text-sky-600 transition">
+                    <i class="fa-solid fa-book-open mr-1"></i> Хуваарь
+                </button>
+                <button onclick="switchTab('bus')" id="tab-btn-bus" class="flex-1 min-w-[60px] py-2 rounded-lg hover:text-sky-600 transition">
+                    <i class="fa-solid fa-bus mr-1"></i> Автобус
+                </button>
+            </div>
+
+            <!-- TAB 1: ATTENDANCE (Parent View) -->
+            <div id="tab-attendance" class="space-y-4">
+                <!-- Share & Link Quick Banner -->
+                <div class="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 p-3 rounded-xl flex items-center justify-between shadow-sm">
+                    <div class="flex items-center space-x-2">
+                        <i class="fa-solid fa-share-nodes text-sky-600 text-lg"></i>
+                        <div>
+                            <h4 class="text-xs font-bold text-gray-800">Эцэг эхчүүдэд Линкээр явуулах</h4>
+                            <p class="text-[10px] text-gray-500">Бүртгэсэн мэдээллийг шууд дамжуулна</p>
+                        </div>
+                    </div>
+                    <button onclick="copyShareableLink()" class="bg-sky-600 hover:bg-sky-700 text-white text-[10px] font-bold px-2.5 py-1.5 rounded-lg shadow">
+                        <i class="fa-solid fa-copy mr-1"></i> Линк хуулах
+                    </button>
+                </div>
+
+                <!-- Teacher Simulation Quick Gate -->
+                <div class="bg-sky-50 border border-sky-100 p-3 rounded-xl">
+                    <div class="flex justify-between items-center mb-2">
+                        <h4 class="text-xs font-bold text-sky-900"><i class="fa-solid fa-wifi mr-1"></i> Цахим Карт / Хаалганы Симуляци:</h4>
+                        <span class="text-[9px] bg-sky-200 text-sky-800 px-1.5 py-0.5 rounded font-bold">Real-Time</span>
+                    </div>
+                    <div class="grid grid-cols-3 gap-1.5">
+                        <button onclick="simulateEvent('enter')" class="text-[11px] bg-emerald-600 text-white py-2 rounded-lg hover:bg-emerald-700 font-medium text-center shadow">
+                            <i class="fa-solid fa-door-open mr-1"></i> Орсон
+                        </button>
+                        <button onclick="simulateEvent('exit')" class="text-[11px] bg-amber-600 text-white py-2 rounded-lg hover:bg-amber-700 font-medium text-center shadow">
+                            <i class="fa-solid fa-door-closed mr-1"></i> Гарсан
+                        </button>
+                        <button onclick="simulateEvent('absent')" class="text-[11px] bg-rose-600 text-white py-2 rounded-lg hover:bg-rose-700 font-medium text-center shadow">
+                            <i class="fa-solid fa-user-xmark mr-1"></i> Тасалсан
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Monthly Stats -->
+                <div class="grid grid-cols-3 gap-2">
+                    <div class="bg-emerald-50 border border-emerald-100 p-2.5 rounded-xl text-center">
+                        <span class="block text-[11px] text-emerald-600 font-medium">Ирсэн</span>
+                        <span class="text-base font-bold text-emerald-700" id="stat-present">18 өдөр</span>
+                    </div>
+                    <div class="bg-amber-50 border border-amber-100 p-2.5 rounded-xl text-center">
+                        <span class="block text-[11px] text-amber-600 font-medium">Хоцорсон</span>
+                        <span class="text-base font-bold text-amber-700" id="stat-late">2 өдөр</span>
+                    </div>
+                    <div class="bg-rose-50 border border-rose-100 p-2.5 rounded-xl text-center">
+                        <span class="block text-[11px] text-rose-600 font-medium">Чөлөөтэй</span>
+                        <span class="text-base font-bold text-rose-700" id="stat-leave">1 өдөр</span>
+                    </div>
+                </div>
+
+                <!-- Activity Log -->
+                <div class="space-y-2">
+                    <h3 class="text-xs font-bold text-gray-700">Түүх ба сүүлийн бүртгэлүүд</h3>
+                    <div id="logs-container" class="space-y-2">
+                        <!-- Dynamic logs -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB 2: CLASS TEACHER PORTAL (NEW: Dedicated Homeroom Teacher Module) -->
+            <div id="tab-class-teacher" class="space-y-4 hidden">
+                <div class="bg-gradient-to-r from-emerald-700 to-teal-800 text-white p-3.5 rounded-2xl shadow-sm">
+                    <div class="flex justify-between items-center mb-1">
+                        <h3 class="text-xs font-bold flex items-center"><i class="fa-solid fa-user-shield mr-1.5 text-emerald-300"></i> Ангийн Удирдсан Багшийн Бүртгэл</h3>
+                        <span class="text-[9px] bg-emerald-400 text-emerald-950 px-2 py-0.5 rounded-full font-bold">Ангийн багш</span>
+                    </div>
+                    <p class="text-[10px] text-emerald-100 mb-3">Бүх сурагчдын ирцийг өглөө бүр нэгтгэн бүртгэж эцэг эхчүүдэд автоматаар харуулна.</p>
+                    
+                    <div class="flex items-center justify-between text-xs bg-emerald-900/50 p-2 rounded-lg border border-emerald-600/50">
+                        <span id="class-teacher-summary-text" class="font-medium">Нийт: 5 сурагч</span>
+                        <button onclick="saveHomeroomAttendance()" class="bg-amber-500 hover:bg-amber-600 text-slate-900 font-bold px-3 py-1 rounded shadow text-[11px]">
+                            <i class="fa-solid fa-floppy-disk mr-1"></i> Ирц Хадгалах
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Student List for Homeroom Teacher -->
+                <div class="bg-white p-3.5 rounded-2xl border border-gray-100 shadow-sm space-y-3">
+                    <div class="flex justify-between items-center border-b pb-2">
+                        <h4 class="text-xs font-bold text-gray-800">Өнөөдрийн ирц бүртгэл</h4>
+                        <span id="homeroom-date" class="text-[10px] font-semibold text-gray-500">2026-10-20</span>
+                    </div>
+
+                    <div id="homeroom-students-list" class="space-y-2.5 max-h-[380px] overflow-y-auto custom-scroll pr-1">
+                        <!-- Dynamic Homeroom Attendance Rows -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB 3: SUBJECT TEACHER PORTAL (Subject Attendance & Grading) -->
+            <div id="tab-teacher-portal" class="space-y-4 hidden">
+                <div class="bg-gradient-to-r from-sky-700 to-indigo-800 text-white p-3.5 rounded-2xl shadow-sm">
+                    <div class="flex justify-between items-center mb-2">
+                        <h3 class="text-xs font-bold flex items-center"><i class="fa-solid fa-chalkboard-user mr-1.5 text-amber-300"></i> Цагийн / Хичээлийн Багшийн Цонх</h3>
+                        <span class="text-[9px] bg-amber-400 text-gray-900 px-2 py-0.5 rounded-full font-bold">Хичээлийн багш</span>
+                    </div>
+                    <div class="grid grid-cols-2 gap-2 text-xs">
+                        <div>
+                            <label class="block text-[10px] text-sky-200 mb-0.5">Зааж буй хичээл</label>
+                            <select id="teacher-subject-select" class="w-full bg-sky-900 border border-sky-500 rounded p-1 text-white font-semibold">
+                                <option value="Математик">Математик</option>
+                                <option value="Монгол хэл">Монгол хэл</option>
+                                <option value="Англи хэл">Англи хэл</option>
+                                <option value="Байгаль шинжлэл">Байгаль шинжлэл</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-[10px] text-sky-200 mb-0.5">Огноо</label>
+                            <input type="date" value="2026-10-20" class="w-full bg-sky-900 border border-sky-500 rounded p-1 text-white text-center">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Student List Attendance & Grade Marking -->
+                <div class="bg-white p-3.5 rounded-2xl border border-gray-100 shadow-sm space-y-3">
+                    <div class="flex justify-between items-center border-b pb-2">
+                        <h4 class="text-xs font-bold text-gray-800">Хичээлийн ирц ба Дүн</h4>
+                        <button onclick="saveTeacherSubmission()" class="bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold px-3 py-1.5 rounded-lg shadow flex items-center space-x-1">
+                            <i class="fa-solid fa-paper-plane"></i>
+                            <span>Илгээх</span>
+                        </button>
+                    </div>
+
+                    <div id="teacher-students-list" class="space-y-3 max-h-[380px] overflow-y-auto custom-scroll pr-1">
+                        <!-- Dynamic Student Grading Rows -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB 4: LESSON SCHEDULE & TEACHERS -->
+            <div id="tab-grades" class="space-y-4 hidden">
+                <div class="bg-white p-3.5 rounded-2xl border border-gray-100 shadow-sm space-y-3">
+                    <div class="flex justify-between items-center border-b pb-2">
+                        <h4 class="text-xs font-bold text-gray-800"><i class="fa-solid fa-calendar-day text-sky-600 mr-1"></i> Өнөөдрийн хичээлийн хуваарь</h4>
+                        <span id="schedule-class-name" class="text-[10px] bg-sky-100 text-sky-700 font-bold px-2 py-0.5 rounded-full">5А анги</span>
+                    </div>
+                    <div id="schedule-container" class="space-y-2">
+                        <!-- Dynamic Schedule List -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB 5: BUS TRACKING -->
+            <div id="tab-bus" class="space-y-4 hidden">
+                <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+                    <div class="flex justify-between items-center mb-3">
+                        <div>
+                            <h3 class="text-xs font-bold text-gray-800">Сургуулийн автобус №B-04</h3>
+                            <p class="text-[10px] text-gray-500">Жолооч: Г.Бат-Эрдэнэ (8811-XXXX)</p>
+                        </div>
+                        <span class="bg-emerald-100 text-emerald-700 text-[10px] px-2 py-0.5 rounded-full font-semibold">
+                            Замд явж байна
+                        </span>
+                    </div>
+
+                    <!-- Simulated Map Graphic -->
+                    <div class="relative w-full h-48 bg-slate-100 rounded-lg overflow-hidden border border-gray-200 flex items-center justify-center">
+                        <div class="absolute inset-0 bg-[linear-gradient(to_right,#e2e8f0_1px,transparent_1px),linear-gradient(to_bottom,#e2e8f0_1px,transparent_1px)] bg-[size:2rem_2rem]"></div>
+                        <div class="absolute w-full h-3 bg-gray-300 transform -rotate-12"></div>
+                        
+                        <div class="absolute top-6 right-10 flex flex-col items-center">
+                            <i class="fa-solid fa-school text-sky-600 text-xl"></i>
+                            <span class="text-[9px] bg-white px-1 rounded shadow text-gray-700 font-bold">Сургууль</span>
+                        </div>
+
+                        <div class="absolute bottom-6 left-10 flex flex-col items-center">
+                            <i class="fa-solid fa-house text-amber-600 text-lg"></i>
+                            <span class="text-[9px] bg-white px-1 rounded shadow text-gray-700 font-bold">Гэр</span>
+                        </div>
+
+                        <div id="bus-marker" class="absolute transition-all duration-1000 flex flex-col items-center" style="top: 45%; left: 45%;">
+                            <div class="w-8 h-8 bg-amber-500 text-white rounded-full flex items-center justify-center shadow-lg border-2 border-white pulse-dot">
+                                <i class="fa-solid fa-bus text-xs"></i>
+                            </div>
+                            <span class="text-[9px] bg-black/75 text-white px-1.5 py-0.5 rounded mt-0.5">40 км/ц</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB 6: LEAVE REQUEST -->
+            <div id="tab-request" class="space-y-4 hidden">
+                <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+                    <h3 class="text-xs font-bold text-gray-800 mb-1">Чөлөөний хүсэлт гаргах</h3>
+                    <p class="text-[10px] text-gray-500 mb-3">Анги удирдсан багшид шууд мэдэгдэгдэнэ</p>
+
+                    <form onsubmit="handleLeaveSubmit(event)" class="space-y-3">
+                        <div>
+                            <label class="block text-[11px] font-medium text-gray-700 mb-1">Шалтгаан</label>
+                            <select id="leave-reason" class="w-full text-xs p-2 border border-gray-200 rounded-lg focus:outline-none focus:border-sky-500">
+                                <option value="Өвчтэй">Өвчтэй / Эмнэлэгт үзүүлэх</option>
+                                <option value="Ар гэрийн гачигдал">Ар гэрийн гачигдал</option>
+                                <option value="Тэмцээн уралдаан">Тэмцээн, уралдаантай</option>
+                                <option value="Бусад">Бусад</option>
+                            </select>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2">
+                            <div>
+                                <label class="block text-[11px] font-medium text-gray-700 mb-1">Эхлэх өдөр</label>
+                                <input type="date" required class="w-full text-xs p-2 border border-gray-200 rounded-lg focus:outline-none">
+                            </div>
+                            <div>
+                                <label class="block text-[11px] font-medium text-gray-700 mb-1">Дуусах өдөр</label>
+                                <input type="date" required class="w-full text-xs p-2 border border-gray-200 rounded-lg focus:outline-none">
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-[11px] font-medium text-gray-700 mb-1">Тайлбар</label>
+                            <textarea rows="2" placeholder="Нэмэлт тайлбар бичнэ үү..." class="w-full text-xs p-2 border border-gray-200 rounded-lg focus:outline-none focus:border-sky-500"></textarea>
+                        </div>
+                        <button type="submit" class="w-full bg-sky-600 hover:bg-sky-700 text-white font-bold py-2 rounded-lg text-xs transition shadow">
+                            Илгээх
+                        </button>
+                    </form>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- Toast Notification -->
+        <div id="notification-toast" class="absolute top-16 left-4 right-4 bg-gray-900/95 backdrop-blur-md text-white p-3 rounded-xl shadow-xl transition-all duration-300 transform -translate-y-20 opacity-0 pointer-events-none flex items-start space-x-3 z-50">
+            <div class="bg-sky-500 p-2 rounded-lg text-white">
+                <i class="fa-solid fa-bell"></i>
+            </div>
+            <div class="flex-1">
+                <h4 id="toast-title" class="text-xs font-bold">Мэдэгдэл</h4>
+                <p id="toast-body" class="text-[11px] text-gray-200 mt-0.5"></p>
+            </div>
+            <button onclick="closeToast()" class="text-gray-400 hover:text-white text-xs p-1">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+        </div>
+
+        <!-- Teacher Settings & Class Creator Modal -->
+        <div id="settings-modal" class="absolute inset-0 bg-black/60 backdrop-blur-sm z-50 hidden flex flex-col justify-end sm:justify-center p-4">
+            <div class="bg-white rounded-2xl max-h-[92%] overflow-y-auto p-4 space-y-4 shadow-2xl">
+                <div class="flex justify-between items-center border-b pb-2">
+                    <div>
+                        <h3 class="text-sm font-bold text-gray-800"><i class="fa-solid fa-sliders text-sky-600 mr-1"></i> Тохиргоо ба Апп Удирдлага</h3>
+                        <p class="text-[10px] text-gray-500">Анги үүсгэх, линкээр бусадтай хуваалцах</p>
+                    </div>
+                    <button onclick="closeSettingsModal()" class="text-gray-400 hover:text-gray-600 text-sm p-1">
+                        <i class="fa-solid fa-xmark"></i>
+                    </button>
+                </div>
+
+                <!-- Edit Class Name & Teacher -->
+                <div class="grid grid-cols-2 gap-2 bg-sky-50 p-2.5 rounded-xl border border-sky-100">
+                    <div>
+                        <label class="block text-[10px] font-bold text-gray-700 mb-0.5">Ангийн нэр/дугаар</label>
+                        <input type="text" id="edit-class-name" value="5А анги" class="w-full text-xs p-1.5 border border-gray-300 rounded focus:outline-none bg-white font-semibold">
+                    </div>
+                    <div>
+                        <label class="block text-[10px] font-bold text-gray-700 mb-0.5">Анги удирдсан багш</label>
+                        <input type="text" id="edit-teacher-name" value="Г.Бат-Эрдэнэ" class="w-full text-xs p-1.5 border border-gray-300 rounded focus:outline-none bg-white">
+                    </div>
+                </div>
+
+                <!-- Edit Students List -->
+                <div>
+                    <label class="block text-xs font-bold text-gray-700 mb-1">Ангийн сурагчдын нэрс (Таслалаар тусгаарлана уу)</label>
+                    <textarea id="edit-students-input" rows="3" class="w-full text-xs p-2 border border-gray-300 rounded-lg focus:outline-none focus:border-sky-500" placeholder="Анар Б., Билгүүн Т., Солонго М."></textarea>
+                </div>
+
+                <!-- How to Deploy & Share Section -->
+                <div class="bg-indigo-50 p-3 rounded-xl border border-indigo-200 space-y-2">
+                    <h4 class="text-xs font-bold text-indigo-900 flex items-center">
+                        <i class="fa-solid fa-globe mr-1.5"></i> Энийг хэрхэн бусадтай хуваалцах ба Линк үүсгэх вэ?
+                    </h4>
+                    <ol class="text-[10px] text-indigo-800 space-y-1.5 list-decimal list-inside">
+                        <li><b>Код татах:</b> Энэ кодыг <i>index.html</i> нэрээр Save / Download хийнэ.</li>
+                        <li><b>Үнэгүй Линк үүсгэх:</b> <a href="https://vercel.com" target="_blank" class="underline text-indigo-600 font-bold">Vercel.com</a> эсвэл <a href="https://netlify.com" target="_blank" class="underline text-indigo-600 font-bold">Netlify.com</a> руу ороод HTML файлаа чирээд ташихад 1 секундэд таны хувийн Вэб Линк бэлэн болно.</li>
+                        <li><b>Эцэг эхчүүдэд илгээх:</b> Линкээ чатаар явуулснаар тэд гар утсаараа шууд ирцээ харна.</li>
+                    </ol>
+                </div>
+
+                <button onclick="saveSettings()" class="w-full bg-sky-600 hover:bg-sky-700 text-white font-bold py-2 rounded-lg text-xs transition shadow">
+                    Мэдээллийг хадгалах
+                </button>
+            </div>
+        </div>
+
+        <!-- Bottom Navigation Bar -->
+        <div class="bg-white border-t border-gray-100 p-2 flex justify-around items-center text-gray-400">
+            <button onclick="switchTab('attendance')" class="flex flex-col items-center text-sky-600">
+                <i class="fa-solid fa-house text-base"></i>
+                <span class="text-[9px] mt-0.5">Нүүр</span>
+            </button>
+            <button onclick="switchTab('class-teacher')" class="flex flex-col items-center hover:text-sky-600">
+                <i class="fa-solid fa-user-shield text-base"></i>
+                <span class="text-[9px] mt-0.5">Ангийн багш</span>
+            </button>
+            <button onclick="switchTab('teacher-portal')" class="flex flex-col items-center hover:text-sky-600">
+                <i class="fa-solid fa-clipboard-user text-base"></i>
+                <span class="text-[9px] mt-0.5">Цагийн багш</span>
+            </button>
+            <button onclick="switchTab('bus')" class="flex flex-col items-center hover:text-sky-600">
+                <i class="fa-solid fa-map-location-dot text-base"></i>
+                <span class="text-[9px] mt-0.5">Автобус</span>
+            </button>
+            <button onclick="switchTab('request')" class="flex flex-col items-center hover:text-sky-600">
+                <i class="fa-solid fa-file-pen text-base"></i>
+                <span class="text-[9px] mt-0.5">Чөлөө</span>
+            </button>
+        </div>
+
+    </div>
+
+    <script>
+        // Default Students Data
+        let classStudents = [
+            { id: "1", name: "Анар Б.", status: "Ирсэн", avatar: "https://images.unsplash.com/photo-1543610892-0b1f7e6d8ac1?w=150&auto=format&fit=crop&q=80", present: 18, late: 2, leave: 1 },
+            { id: "2", name: "Билгүүн Т.", status: "Ирсэн", avatar: "https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150&auto=format&fit=crop&q=80", present: 19, late: 1, leave: 0 },
+            { id: "3", name: "Солонго М.", status: "Ирсэн", avatar: "https://images.unsplash.com/photo-1517841905240-472988babdf9?w=150&auto=format&fit=crop&q=80", present: 20, late: 0, leave: 0 },
+            { id: "4", name: "Тэмүүлэн Э.", status: "Хоцорсон", avatar: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80", present: 17, late: 3, leave: 1 },
+            { id: "5", name: "Хулан Б.", status: "Чөлөөтэй", avatar: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80", present: 18, late: 0, leave: 2 }
+        ];
+
+        window.classStudents = classStudents;
+        window.className = "5А анги";
+        window.teacherName = "Г.Бат-Эрдэнэ";
+
+        window.updateUIFromCloudData = function() {
+            if (window.classStudents && window.classStudents.length > 0) {
+                classStudents = window.classStudents;
+                selectedStudent = classStudents.find(s => s.id === selectedStudent.id) || classStudents[0];
+            }
+            const schoolInfoEl = document.getElementById('child-school');
+            if (schoolInfoEl) schoolInfoEl.innerText = `${window.className} • Багш: ${window.teacherName}`;
+            
+            renderStudentOptions();
+            loadStudentData(selectedStudent);
+            renderTeacherPortal();
+            renderHomeroomTeacherPortal();
+        };
+
+        // Default Today Schedule with Subject & Teacher
+        let todaySchedule = [
+            { num: 1, name: "Математик", teacher: "Д.Нямсүрэн", time: "08:00 - 08:40", room: "Каб #204", status: "Дууссан", statusColor: "emerald" },
+            { num: 2, name: "Монгол хэл", teacher: "Б.Оюунчимэг", time: "08:50 - 09:30", room: "Каб #102", status: "Орж байна", statusColor: "sky" },
+            { num: 3, name: "Англи хэл", teacher: "С.Батбаяраа", time: "09:40 - 10:20", room: "Каб #301", status: "Дараагийн хичээл", statusColor: "amber" },
+            { num: 4, name: "Байгаль шинжлэл", teacher: "Г.Бат-Эрдэнэ", time: "10:40 - 11:20", room: "Каб #105", status: "Хүлээгдэж буй", statusColor: "gray" }
+        ];
+
+        let selectedStudent = classStudents[0];
+
+        // Local Storage Persistence Support
+        function initDataFromStorage() {
+            try {
+                const storedStudents = localStorage.getItem('classStudents');
+                if (storedStudents) {
+                    classStudents = JSON.parse(storedStudents);
+                    selectedStudent = classStudents[0];
+                }
+            } catch (e) {
+                console.log("Storage read error:", e);
+            }
+        }
+
+        function saveDataToStorage() {
+            try {
+                localStorage.setItem('classStudents', JSON.stringify(classStudents));
+            } catch (e) {
+                console.log("Storage save error:", e);
+            }
+        }
+
+        // Clock Update
+        function updateClock() {
+            const now = new Date();
+            const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            const clockEl = document.getElementById('current-time-clock');
+            if (clockEl) clockEl.innerText = timeStr;
+        }
+        setInterval(updateClock, 1000);
+        updateClock();
+
+        // Render Student Dropdown
+        function renderStudentOptions() {
+            const selectEl = document.getElementById('student-select');
+            if (!selectEl) return;
+            selectEl.innerHTML = classStudents.map(s => 
+                `<option value="${s.id}" ${s.id === selectedStudent.id ? 'selected' : ''}>${s.name}</option>`
+            ).join('');
+        }
+
+        function switchStudent(studentId) {
+            const found = classStudents.find(s => s.id === studentId);
+            if (found) {
+                selectedStudent = found;
+                loadStudentData(selectedStudent);
+            }
+        }
+
+        // Load Student Header & Stats
+        function loadStudentData(student) {
+            const avatar = document.getElementById('child-avatar');
+            if (avatar) avatar.src = student.avatar;
+
+            const statPresent = document.getElementById('stat-present');
+            const statLate = document.getElementById('stat-late');
+            const statLeave = document.getElementById('stat-leave');
+
+            if (statPresent) statPresent.innerText = `${student.present} өдөр`;
+            if (statLate) statLate.innerText = `${student.late} өдөр`;
+            if (statLeave) statLeave.innerText = `${student.leave} өдөр`;
+
+            renderLogs();
+        }
+
+        // Render Activity Logs
+        function renderLogs() {
+            const container = document.getElementById('logs-container');
+            if (!container) return;
+
+            const logs = [
+                { time: "07:55 AM", title: "Ангийн Багшийн Бүртгэл", desc: `Төлөв: ${selectedStudent.status || "Ирсэн"}`, icon: "fa-user-shield", color: "emerald" },
+                { time: "08:00 AM", title: "Математикийн хичээл", desc: "Багш Д.Нямсүрэн ирц авсан", icon: "fa-book-open", color: "sky" },
+                { time: "08:50 AM", title: "Монгол хэлний хичээл", desc: "Ангид байна", icon: "fa-chalkboard-user", color: "indigo" }
+            ];
+
+            container.innerHTML = logs.map(l => `
+                <div class="flex items-center space-x-3 p-2.5 bg-gray-50 rounded-xl border border-gray-100">
+                    <div class="w-8 h-8 rounded-lg bg-${l.color}-100 text-${l.color}-600 flex items-center justify-center flex-shrink-0 text-xs">
+                        <i class="fa-solid ${l.icon}"></i>
+                    </div>
+                    <div class="flex-1 min-w-0">
+                        <div class="flex justify-between items-center">
+                            <h5 class="text-xs font-bold text-gray-800 truncate">${l.title}</h5>
+                            <span class="text-[10px] text-gray-400">${l.time}</span>
+                        </div>
+                        <p class="text-[11px] text-gray-500 truncate">${l.desc}</p>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // Render Schedule
+        function renderSchedule() {
+            const container = document.getElementById('schedule-container');
+            if (!container) return;
+
+            container.innerHTML = todaySchedule.map(s => `
+                <div class="p-2.5 rounded-xl bg-gray-50 border border-gray-100 flex justify-between items-center">
+                    <div>
+                        <div class="flex items-center space-x-2">
+                            <span class="w-5 h-5 bg-sky-100 text-sky-700 text-[10px] font-bold rounded-full flex items-center justify-center">${s.num}</span>
+                            <h5 class="text-xs font-bold text-gray-800">${s.name}</h5>
+                        </div>
+                        <p class="text-[10px] text-gray-500 mt-0.5"><i class="fa-solid fa-chalkboard-user mr-1"></i> ${s.teacher} • ${s.room}</p>
+                    </div>
+                    <div class="text-right">
+                        <span class="text-[10px] font-semibold text-gray-600 block">${s.time}</span>
+                        <span class="text-[9px] bg-${s.statusColor}-100 text-${s.statusColor}-700 px-1.5 py-0.5 rounded font-bold">${s.status}</span>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // RENDER HOMEROOM / CLASS TEACHER TAB
+        function renderHomeroomTeacherPortal() {
+            const container = document.getElementById('homeroom-students-list');
+            const summaryEl = document.getElementById('class-teacher-summary-text');
+            if (!container) return;
+
+            if (summaryEl) summaryEl.innerText = `Нийт: ${classStudents.length} сурагч`;
+
+            container.innerHTML = classStudents.map((student, idx) => `
+                <div class="p-2.5 rounded-xl bg-gray-50 border border-gray-200 space-y-2">
+                    <div class="flex justify-between items-center">
+                        <div class="flex items-center space-x-2">
+                            <img src="${student.avatar}" class="w-7 h-7 rounded-full object-cover">
+                            <span class="text-xs font-bold text-gray-800">${student.name}</span>
+                        </div>
+                        <span class="text-[10px] bg-slate-200 text-slate-700 px-2 py-0.5 rounded font-semibold">
+                            Бүртгэл #${student.id}
+                        </span>
+                    </div>
+
+                    <!-- Attendance Radios for Homeroom Teacher -->
+                    <div class="grid grid-cols-4 gap-1 bg-white p-1 rounded-lg border border-gray-100 text-[9px] font-medium">
+                        <label class="flex items-center justify-center space-x-0.5 p-1 rounded cursor-pointer hover:bg-emerald-50 text-emerald-700">
+                            <input type="radio" name="hr-att-${idx}" value="Ирсэн" ${student.status === 'Ирсэн' ? 'checked' : ''} class="accent-emerald-600">
+                            <span>✅ Ирсэн</span>
+                        </label>
+                        <label class="flex items-center justify-center space-x-0.5 p-1 rounded cursor-pointer hover:bg-amber-50 text-amber-700">
+                            <input type="radio" name="hr-att-${idx}" value="Хоцорсон" ${student.status === 'Хоцорсон' ? 'checked' : ''} class="accent-amber-600">
+                            <span>⏰ Хоцорсон</span>
+                        </label>
+                        <label class="flex items-center justify-center space-x-0.5 p-1 rounded cursor-pointer hover:bg-sky-50 text-sky-700">
+                            <input type="radio" name="hr-att-${idx}" value="Чөлөөтэй" ${student.status === 'Чөлөөтэй' ? 'checked' : ''} class="accent-sky-600">
+                            <span>📄 Чөлөө</span>
+                        </label>
+                        <label class="flex items-center justify-center space-x-0.5 p-1 rounded cursor-pointer hover:bg-rose-50 text-rose-700">
+                            <input type="radio" name="hr-att-${idx}" value="Тасалсан" ${student.status === 'Тасалсан' ? 'checked' : ''} class="accent-rose-600">
+                            <span>❌ Тасалсан</span>
+                        </label>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function saveHomeroomAttendance() {
+            classStudents.forEach((student, idx) => {
+                const checkedRadio = document.querySelector(`input[name="hr-att-${idx}"]:checked`);
+                if (checkedRadio) {
+                    student.status = checkedRadio.value;
+                }
+            });
+            saveDataToStorage();
+            if (window.saveCloudData) {
+                window.saveCloudData(classStudents, window.className, window.teacherName);
+            }
+            loadStudentData(selectedStudent);
+            showToast("Ангийн ирц хадгалагдлаа", "Анги удирдсан багшийн бүртгэсэн ирц онлайн баазад синхрончлогдон эцэг эхчүүдэд харагдана.");
+        }
+
+        // Settings Modal Management
+        function openSettingsModal() {
+            const modal = document.getElementById('settings-modal');
+            if (modal) {
+                modal.classList.remove('hidden');
+                document.getElementById('edit-students-input').value = classStudents.map(s => s.name).join(', ');
+            }
+        }
+
+        function closeSettingsModal() {
+            const modal = document.getElementById('settings-modal');
+            if (modal) modal.classList.add('hidden');
+        }
+
+        function saveSettings() {
+            const classInput = document.getElementById('edit-class-name').value;
+            const teacherInput = document.getElementById('edit-teacher-name').value;
+            const studentsInput = document.getElementById('edit-students-input').value;
+
+            if (classInput) {
+                window.className = classInput;
+                window.teacherName = teacherInput;
+                document.getElementById('child-school').innerText = `${classInput} • Багш: ${teacherInput}`;
+                const classNameEl = document.getElementById('schedule-class-name');
+                if (classNameEl) classNameEl.innerText = classInput;
+            }
+
+            if (studentsInput.trim()) {
+                const names = studentsInput.split(',').map(n => n.trim()).filter(Boolean);
+                classStudents = names.map((name, i) => ({
+                    id: String(i + 1),
+                    name: name,
+                    status: "Ирсэн",
+                    avatar: `https://images.unsplash.com/photo-1543610892-0b1f7e6d8ac1?w=150&auto=format&fit=crop&q=80`,
+                    present: 18,
+                    late: 1,
+                    leave: 0
+                }));
+                window.classStudents = classStudents;
+                selectedStudent = classStudents[0];
+                
+                saveDataToStorage();
+                if (window.saveCloudData) {
+                    window.saveCloudData(classStudents, window.className, window.teacherName);
+                }
+                
+                renderStudentOptions();
+                loadStudentData(selectedStudent);
+                renderTeacherPortal();
+                renderHomeroomTeacherPortal();
+            }
+
+            closeSettingsModal();
+            showToast("Хадгалагдлаа", "Анги болон сурагчдын мэдээлэл онлайн баазад шинэчлэгдлээ.");
+        }
+
+        // Settings Modal Management
+        function openSettingsModal() {
+            const modal = document.getElementById('settings-modal');
+            if (modal) {
+                modal.classList.remove('hidden');
+                document.getElementById('edit-students-input').value = classStudents.map(s => s.name).join(', ');
+            }
+        }
+
+        function closeSettingsModal() {
+            const modal = document.getElementById('settings-modal');
+            if (modal) modal.classList.add('hidden');
+        }
+
+        function saveSettings() {
+            const classInput = document.getElementById('edit-class-name').value;
+            const teacherInput = document.getElementById('edit-teacher-name').value;
+            const studentsInput = document.getElementById('edit-students-input').value;
+
+            if (classInput) {
+                document.getElementById('child-school').innerText = `${classInput} • Багш: ${teacherInput}`;
+                const classNameEl = document.getElementById('schedule-class-name');
+                if (classNameEl) classNameEl.innerText = classInput;
+            }
+
+            if (studentsInput.trim()) {
+                const names = studentsInput.split(',').map(n => n.trim()).filter(Boolean);
+                classStudents = names.map((name, i) => ({
+                    id: String(i + 1),
+                    name: name,
+                    status: "Ирсэн",
+                    avatar: `https://images.unsplash.com/photo-1543610892-0b1f7e6d8ac1?w=150&auto=format&fit=crop&q=80`,
+                    present: 18,
+                    late: 1,
+                    leave: 0
+                }));
+                selectedStudent = classStudents[0];
+                saveDataToStorage();
+                renderStudentOptions();
+                loadStudentData(selectedStudent);
+                renderTeacherPortal();
+                renderHomeroomTeacherPortal();
+            }
+
+            closeSettingsModal();
+            showToast("Хадгалагдлаа", "Анги болон хичээлийн мэдээлэл шинэчлэгдлээ.");
+        }
+
+        function copyShareableLink() {
+            const currentUrl = window.location.href;
+            const dummyInput = document.createElement('input');
+            document.body.appendChild(dummyInput);
+            dummyInput.value = currentUrl;
+            dummyInput.select();
+            document.execCommand('copy');
+            document.body.removeChild(dummyInput);
+
+            showToast("Линк Хуулагдлаа!", "Энэхүү холбоосыг эцэг эхчүүдэд болон бусад багш нар руу чатаар илгээж болно.");
+        }
+
+        // Initialize UI
+        window.onload = function() {
+            initDataFromStorage();
+            renderStudentOptions();
+            loadStudentData(selectedStudent);
+            renderSchedule();
+            renderTeacherPortal();
+            renderHomeroomTeacherPortal();
+        };
+
+        // Render Teacher Grading & Attendance List
+        function renderTeacherPortal() {
+            const container = document.getElementById('teacher-students-list');
+            if (!container) return;
+
+            container.innerHTML = classStudents.map((student, idx) => `
+                <div class="p-2.5 rounded-xl bg-gray-50 border border-gray-200 space-y-2">
+                    <div class="flex justify-between items-center">
+                        <div class="flex items-center space-x-2">
+                            <img src="${student.avatar}" class="w-7 h-7 rounded-full object-cover">
+                            <span class="text-xs font-bold text-gray-800">${student.name}</span>
+                        </div>
+                        <div class="flex items-center space-x-1">
+                            <span class="text-[10px] text-gray-500 font-medium">Дүн/Оноо:</span>
+                            <select id="grade-val-${idx}" class="text-xs border rounded p-1 font-bold bg-white text-sky-700 border-sky-300">
+                                <option value="100 (A)">100 (A)</option>
+                                <option value="90 (A-)">90 (A-)</option>
+                                <option value="80 (B)">80 (B)</option>
+                                <option value="70 (C)">70 (C)</option>
+                                <option value="60 (D)">60 (D)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-3 gap-1 bg-white p-1 rounded-lg border border-gray-100 text-[10px] font-medium">
+                        <label class="flex items-center justify-center space-x-1 p-1 rounded cursor-pointer hover:bg-emerald-50 text-emerald-700">
+                            <input type="radio" name="att-${idx}" value="Ирсэн" checked class="accent-emerald-600">
+                            <span>✅ Ирсэн</span>
+                        </label>
+                        <label class="flex items-center justify-center space-x-1 p-1 rounded cursor-pointer hover:bg-amber-50 text-amber-700">
+                            <input type="radio" name="att-${idx}" value="Хоцорсон" class="accent-amber-600">
+                            <span>⏰ Хоцорсон</span>
+                        </label>
+                        <label class="flex items-center justify-center space-x-1 p-1 rounded cursor-pointer hover:bg-rose-50 text-rose-700">
+                            <input type="radio" name="att-${idx}" value="Тасалсан" class="accent-rose-600">
+                            <span>❌ Тасалсан</span>
+                        </label>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function saveTeacherSubmission() {
+            const subject = document.getElementById('teacher-subject-select').value;
+            showToast("Амжилттай илгээгдлээ!", `${subject} хичээлийн ирц болон дүнг багш бүртгэн эцэг эхчүүдэд илгээлээ.`);
+        }
+
+        function switchTab(tabName) {
+            ['attendance', 'class-teacher', 'teacher-portal', 'bus', 'grades', 'request'].forEach(tab => {
+                const el = document.getElementById(`tab-${tab}`);
+                const btn = document.getElementById(`tab-btn-${tab}`);
+                if (tab === tabName) {
+                    el?.classList.remove('hidden');
+                    btn?.classList.add('bg-white', 'shadow', 'text-sky-600', 'font-bold');
+                } else {
+                    el?.classList.add('hidden');
+                    btn?.classList.remove('bg-white', 'shadow', 'text-sky-600', 'font-bold');
+                }
+            });
+        }
+
+        function simulateEvent(type) {
+            const statusText = document.getElementById('status-text');
+            const statusTime = document.getElementById('status-time');
+            const statusIcon = document.getElementById('status-icon');
+            const statusIconBg = document.getElementById('status-icon-bg');
+            const badge = document.getElementById('child-status-badge');
+
+            const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+            if (type === 'enter') {
+                statusText.innerText = "Сургууль дээрээ байна";
+                statusTime.innerText = timeStr;
+                statusIcon.className = "fa-solid fa-school-circle-check text-xl";
+                statusIconBg.className = "w-10 h-10 rounded-lg bg-emerald-500/20 flex items-center justify-center text-emerald-300";
+                badge.className = "absolute bottom-0 right-0 w-3.5 h-3.5 bg-emerald-500 border-2 border-white rounded-full";
+                showToast("Ирцийн мэдэгдэл", `${selectedStudent.name} сургуульд нэвтэрлээ (${timeStr}).`);
+            } else if (type === 'exit') {
+                statusText.innerText = "Сургуулиас гарсан";
+                statusTime.innerText = timeStr;
+                statusIcon.className = "fa-solid fa-person-walking-arrow-right text-xl";
+                statusIconBg.className = "w-10 h-10 rounded-lg bg-amber-500/20 flex items-center justify-center text-amber-300";
+                badge.className = "absolute bottom-0 right-0 w-3.5 h-3.5 bg-amber-500 border-2 border-white rounded-full";
+                showToast("Ирцийн мэдэгдэл", `${selectedStudent.name} сургуулиас гарлаа (${timeStr}).`);
+            } else {
+                statusText.innerText = "Тасалсан / Ирээгүй";
+                statusTime.innerText = timeStr;
+                statusIcon.className = "fa-solid fa-circle-xmark text-xl";
+                statusIconBg.className = "w-10 h-10 rounded-lg bg-rose-500/20 flex items-center justify-center text-rose-300";
+                badge.className = "absolute bottom-0 right-0 w-3.5 h-3.5 bg-rose-500 border-2 border-white rounded-full";
+                showToast("Анхааруулга!", `${selectedStudent.name} хичээлдээ ирээгүй байна!`);
+            }
+        }
+
+        let toastTimeout;
+        function triggerNotification() {
+            showToast("Багшийн мэдэгдэл", `${selectedStudent.name}-ийн Математикийн хичээлийн ирц бүртгэгдлээ.`);
+        }
+
+        function showToast(title, body) {
+            const toast = document.getElementById('notification-toast');
+            document.getElementById('toast-title').innerText = title;
+            document.getElementById('toast-body').innerText = body;
+            toast.classList.remove('-translate-y-20', 'opacity-0', 'pointer-events-none');
+            toast.classList.add('translate-y-0', 'opacity-100');
+            clearTimeout(toastTimeout);
+            toastTimeout = setTimeout(closeToast, 4000);
+        }
+
+        function closeToast() {
+            const toast = document.getElementById('notification-toast');
+            toast.classList.remove('translate-y-0', 'opacity-100');
+            toast.classList.add('-translate-y-20', 'opacity-0', 'pointer-events-none');
+        }
+
+        function handleLeaveSubmit(e) {
+            e.preventDefault();
+            showToast("Чөлөөний хүсэлт", "Хүсэлт багшид амжилттай илгээгдлээ.");
+            switchTab('attendance');
+        }
+    </script>
+</body>
+</html>
